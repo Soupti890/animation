@@ -2,185 +2,297 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Loveheart Animation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>3D Loveheart Animation (Mobile Smooth)</title>
   <style>
     * {
-      box-sizing: border-box;
       margin: 0;
       padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
     }
 
     body {
-      background-color: #050505;
+      background: #050505;
+      width: 100vw;
       height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
       overflow: hidden;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      perspective: 1000px;
-      cursor: pointer;
-      user-select: none;
-    }
-
-    .scene {
-      position: relative;
-      width: 400px;
-      height: 400px;
-      transform-style: preserve-3d;
-      animation: rotateHeart 10s linear infinite;
       display: flex;
       justify-content: center;
       align-items: center;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      touch-action: none;
+      user-select: none;
+      cursor: pointer;
     }
 
-    @keyframes rotateHeart {
-      0% {
-        transform: rotateY(0deg);
-      }
-      100% {
-        transform: rotateY(360deg);
-      }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
     }
 
-    /* Center message revealed during scatter */
     .center-message {
       position: absolute;
       color: #ffffff;
-      font-size: 1.5rem;
+      font-size: clamp(1.1rem, 4.5vw, 1.5rem);
       font-weight: 600;
       letter-spacing: 1px;
-      text-shadow: 0 0 12px #ff4f7e, 0 0 24px #ff4f7e;
+      text-shadow: 0 0 10px #ff4f7e, 0 0 20px #ff4f7e;
       opacity: 0;
-      transform: scale(0.8);
-      transition: opacity 0.8s ease, transform 0.8s ease;
+      transform: scale(0.85) translateZ(0);
+      transition: opacity 0.6s ease, transform 0.6s ease;
       pointer-events: none;
-      z-index: 10;
+      will-change: opacity, transform;
     }
 
     body.scattered .center-message {
       opacity: 1;
-      transform: scale(1);
-    }
-
-    /* 3D position wrapper for each word */
-    .word-node {
-      position: absolute;
-      transform-style: preserve-3d;
-      transform: translate3d(var(--x), var(--y), var(--z)) rotateZ(var(--rot));
-      transition: transform 1.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 1.2s ease;
-    }
-
-    body.scattered .word-node {
-      transform: translate3d(var(--sx), var(--sy), var(--sz)) rotateZ(var(--srot));
-      opacity: 0.28;
-    }
-
-    /* Pink/red Mexican-wave effect from LoveWave.css */
-    .love-word {
-      display: inline-block;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      color: #ffb3cf;
-      text-shadow: 0 0 10px currentColor;
-      animation: loveWave 3s ease-in-out infinite;
-      animation-delay: calc(var(--i) * 45ms);
-      white-space: nowrap;
-    }
-
-    @keyframes loveWave {
-      0%, 100% {
-        color: #ffb3cf;
-        transform: scale(1);
-      }
-      35% {
-        color: #ff4f7e;
-        transform: scale(1.12);
-      }
+      transform: scale(1) translateZ(0);
     }
   </style>
 </head>
 <body>
 
   <div class="center-message">Forever yours</div>
-  <div class="scene" id="heartScene"></div>
+  <canvas id="heartCanvas"></canvas>
 
   <script>
-    const scene = document.getElementById('heartScene');
-    const pointsOnCurve = 44; // Number of words around the heart perimeter
-    const depthLayers = 9;    // Number of 3D depth slices
-    const layerSpacing = 12;  // Z-distance between slices in px
-    const scale = 9.5;        // Overall size of the heart
+    const canvas = document.getElementById('heartCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
 
+    // Cap DPR at 2 so high-density mobile screens don't bottleneck GPU fill-rate
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let width = 0;
+    let height = 0;
+    let cx = 0;
+    let cy = 0;
+    let baseScale = 1;
+
+    function resize() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      cx = (width * 0.5) * dpr;
+      cy = (height * 0.5) * dpr;
+      // Responsive scale for portrait mobile screens
+      baseScale = Math.min(width, height) / 420;
+    }
+    window.addEventListener('resize', resize, { passive: true });
+    resize();
+
+    // 1. Pre-bake 16 color/glow sprites matching LoveWave.css (#ffb3cf -> #ff4f7e)
+    const SPRITE_STEPS = 16;
+    const SPRITE_W = 52;
+    const SPRITE_H = 26;
+    const HALF_W = SPRITE_W / 2;
+    const HALF_H = SPRITE_H / 2;
+    const sprites = new Array(SPRITE_STEPS);
+
+    for (let s = 0; s < SPRITE_STEPS; s++) {
+      const t = s / (SPRITE_STEPS - 1);
+      const r = 255;
+      const g = Math.round(179 + (79 - 179) * t);
+      const b = Math.round(207 + (126 - 207) * t);
+      const color = `rgb(${r},${g},${b})`;
+
+      const off = document.createElement('canvas');
+      off.width = SPRITE_W * dpr;
+      off.height = SPRITE_H * dpr;
+      const octx = off.getContext('2d');
+      octx.scale(dpr, dpr);
+      octx.font = '600 11px system-ui, -apple-system, sans-serif';
+      octx.textAlign = 'center';
+      octx.textBaseline = 'middle';
+      octx.shadowColor = color;
+      octx.shadowBlur = 9;
+      octx.fillStyle = color;
+      octx.fillText('love', HALF_W, HALF_H);
+      sprites[s] = off;
+    }
+
+    // 2. Build 3D Heart Geometry in Pre-Allocated Flat Arrays (Zero GC in loop)
+    const pointsOnCurve = 36;
+    const depthLayers = 7;
+    const total = pointsOnCurve * depthLayers;
+    const layerSpacing = 13;
+    const heartUnit = 9.2;
+
+    const baseX = new Float32Array(total);
+    const baseY = new Float32Array(total);
+    const baseZ = new Float32Array(total);
+    const baseAngle = new Float32Array(total);
+    const baseCosA = new Float32Array(total);
+    const baseSinA = new Float32Array(total);
+
+    const scatX = new Float32Array(total);
+    const scatY = new Float32Array(total);
+    const scatZ = new Float32Array(total);
+    const scatAngle = new Float32Array(total);
+    const delayMs = new Float32Array(total);
+
+    // Pre-allocated render buffers
+    const projX = new Float32Array(total);
+    const projY = new Float32Array(total);
+    const projZ = new Float32Array(total);
+    const projScale = new Float32Array(total);
+    const projCos = new Float32Array(total);
+    const projSin = new Float32Array(total);
+    const projSprite = new Uint8Array(total);
+    const drawOrder = new Uint16Array(total);
+
+    let idx = 0;
     for (let l = 0; l < depthLayers; l++) {
       const z = (l - (depthLayers - 1) / 2) * layerSpacing;
-
-      // Slight tapering on outer layers for a rounded 3D bevel
-      const NormalizedLayer = Math.abs(l - (depthLayers - 1) / 2) / ((depthLayers - 1) / 2);
-      const layerScale = scale * (1 - NormalizedLayer * 0.12);
+      const normLayer = Math.abs(l - (depthLayers - 1) / 2) / ((depthLayers - 1) / 2);
+      const layerScale = heartUnit * (1 - normLayer * 0.12);
 
       for (let i = 0; i < pointsOnCurve; i++) {
         const t = (i / pointsOnCurve) * Math.PI * 2;
+        const sinT = Math.sin(t);
+        const cosT = Math.cos(t);
 
-        // Parametric heart equation
-        const x = 16 * Math.pow(Math.sin(t), 3) * layerScale;
-        const y = -(
-          13 * Math.cos(t) -
-          5 * Math.cos(2 * t) -
-          2 * Math.cos(3 * t) -
-          Math.cos(4 * t)
-        ) * layerScale;
+        const x = 16 * (sinT * sinT * sinT) * layerScale;
+        const y = -(13 * cosT - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) * layerScale;
 
-        // Tangent angle so words follow the heart's contour
-        const dx = 48 * Math.pow(Math.sin(t), 2) * Math.cos(t);
-        const dy = -(
-          -13 * Math.sin(t) +
-          10 * Math.sin(2 * t) +
-          6 * Math.sin(3 * t) +
-          4 * Math.sin(4 * t)
-        );
-        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        const dx = 48 * sinT * sinT * cosT;
+        const dy = -(-13 * sinT + 10 * Math.sin(2 * t) + 6 * Math.sin(3 * t) + 4 * Math.sin(4 * t));
+        const angle = Math.atan2(dy, dx);
 
-        // Random 3D scatter coordinates for the explosion effect
-        const sx = x * (1.8 + Math.random() * 1.4) + (Math.random() - 0.5) * 160;
-        const sy = y * (1.8 + Math.random() * 1.4) + (Math.random() - 0.5) * 160;
-        const sz = z * 4 + (Math.random() - 0.5) * 300;
-        const srot = angle + (Math.random() - 0.5) * 180;
+        baseX[idx] = x;
+        baseY[idx] = y;
+        baseZ[idx] = z;
+        baseAngle[idx] = angle;
+        baseCosA[idx] = Math.cos(angle);
+        baseSinA[idx] = Math.sin(angle);
 
-        const node = document.createElement('div');
-        node.className = 'word-node';
-        node.style.setProperty('--x', `${x.toFixed(1)}px`);
-        node.style.setProperty('--y', `${y.toFixed(1)}px`);
-        node.style.setProperty('--z', `${z.toFixed(1)}px`);
-        node.style.setProperty('--rot', `${angle.toFixed(1)}deg`);
-        node.style.setProperty('--sx', `${sx.toFixed(1)}px`);
-        node.style.setProperty('--sy', `${sy.toFixed(1)}px`);
-        node.style.setProperty('--sz', `${sz.toFixed(1)}px`);
-        node.style.setProperty('--srot', `${srot.toFixed(1)}deg`);
+        scatX[idx] = x * (1.7 + Math.random() * 1.3) + (Math.random() - 0.5) * 140;
+        scatY[idx] = y * (1.7 + Math.random() * 1.3) + (Math.random() - 0.5) * 140;
+        scatZ[idx] = z * 3.8 + (Math.random() - 0.5) * 260;
+        scatAngle[idx] = angle + (Math.random() - 0.5) * Math.PI;
 
-        const word = document.createElement('span');
-        word.className = 'love-word';
-        word.style.setProperty('--i', i + l * 2);
-        word.textContent = 'love';
-
-        node.appendChild(word);
-        scene.appendChild(node);
+        delayMs[idx] = (i + l * 2) * 45;
+        drawOrder[idx] = idx;
+        idx++;
       }
     }
 
-    // Toggle scatter on click or periodically like in the video
-    document.body.addEventListener('click', () => {
-      document.body.classList.toggle('scattered');
-    });
+    // 3. Touch / Click & Auto-Scatter State
+    let scattered = false;
+    let scatterProgress = 0;
+
+    function setScattered(state) {
+      scattered = state;
+      document.body.classList.toggle('scattered', scattered);
+    }
+
+    window.addEventListener('pointerdown', () => {
+      setScattered(!scattered);
+    }, { passive: true });
 
     setInterval(() => {
-      document.body.classList.add('scattered');
-      setTimeout(() => {
-        document.body.classList.remove('scattered');
-      }, 3000);
+      setScattered(true);
+      setTimeout(() => setScattered(false), 2800);
     }, 9000);
+
+    // Fast in-place insertion sort (optimal for smoothly rotating Z-buffers)
+    function sortByDepth() {
+      for (let i = 1; i < total; i++) {
+        const key = drawOrder[i];
+        const keyZ = projZ[key];
+        let j = i - 1;
+        while (j >= 0 && projZ[drawOrder[j]] < keyZ) {
+          drawOrder[j + 1] = drawOrder[j];
+          j--;
+        }
+        drawOrder[j + 1] = key;
+      }
+    }
+
+    // 4. Zero-Allocation Render Loop
+    function animate(now) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#050505';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const target = scattered ? 1 : 0;
+      scatterProgress += (target - scatterProgress) * 0.07;
+      const isScattering = scatterProgress > 0.001;
+
+      const rotY = now * 0.00065;
+      const cosY = Math.cos(rotY);
+      const sinY = Math.sin(rotY);
+      // 3D side-profile foreshortening factor
+      const fx = 0.2 + 0.8 * Math.abs(cosY);
+      const fov = 650;
+
+      for (let i = 0; i < total; i++) {
+        let curX = baseX[i];
+        let curY = baseY[i];
+        let curZ = baseZ[i];
+        let cosA = baseCosA[i];
+        let sinA = baseSinA[i];
+
+        if (isScattering) {
+          curX += (scatX[i] - curX) * scatterProgress;
+          curY += (scatY[i] - curY) * scatterProgress;
+          curZ += (scatZ[i] - curZ) * scatterProgress;
+          const ang = baseAngle[i] + (scatAngle[i] - baseAngle[i]) * scatterProgress;
+          cosA = Math.cos(ang);
+          sinA = Math.sin(ang);
+        }
+
+        const rx = (curX * cosY + curZ * sinY) * baseScale;
+        const ry = curY * baseScale;
+        const rz = (-curX * sinY + curZ * cosY) * baseScale;
+
+        const perspective = fov / (fov + rz + 360);
+
+        // 3-second LoveWave.css pulse (peaks at 35% with scale 1.12)
+        const cycle = (((now - delayMs[i]) % 3000) + 3000) % 3000 / 3000;
+        const rawWave = cycle < 0.35
+          ? cycle / 0.35
+          : 1 - (cycle - 0.35) / 0.65;
+        // Smooth ease-in-out curve
+        const wave = rawWave * rawWave * (3 - 2 * rawWave);
+
+        projX[i] = cx + rx * perspective * dpr;
+        projY[i] = cy + ry * perspective * dpr;
+        projZ[i] = rz;
+        projScale[i] = perspective * baseScale * (1 + wave * 0.12) * dpr;
+        projCos[i] = cosA;
+        projSin[i] = sinA;
+        projSprite[i] = (wave * (SPRITE_STEPS - 1) + 0.5) | 0;
+      }
+
+      sortByDepth();
+
+      ctx.globalAlpha = 1 - scatterProgress * 0.7;
+
+      for (let i = 0; i < total; i++) {
+        const id = drawOrder[i];
+        const s = projScale[id];
+        const cosA = projCos[id];
+        const sinA = projSin[id];
+
+        // Direct 2D matrix transform with 3D Y-rotation foreshortening
+        ctx.setTransform(
+          s * fx * cosA,
+          s * sinA,
+          -s * fx * sinA,
+          s * cosA,
+          projX[id],
+          projY[id]
+        );
+
+        ctx.drawImage(sprites[projSprite[id]], -HALF_W, -HALF_H, SPRITE_W, SPRITE_H);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    requestAnimationFrame(animate);
   </script>
 </body>
 </html>
